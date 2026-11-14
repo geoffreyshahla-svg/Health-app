@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My Health Plan</title>
+<style>
+  :root{--bg:#f5f7fa;--card:#fff;--ink:#1c2430;--mute:#667085;--acc:#16a34a;--acc2:#0ea5e9;--warn:#d97706;--line:#e4e7ec}
+  @media (prefers-color-scheme:dark){:root{--bg:#0f141a;--card:#18202a;--ink:#e8edf3;--mute:#93a0b0;--line:#2a3441}}
+  *{box-sizing:border-box}
+  body{margin:0;font:16px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--ink)}
+  main{max-width:900px;margin:0 auto;padding:16px}
+  h1{margin:8px 0 16px}h2{margin:0 0 12px;font-size:1.1rem}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px}
+  .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+  label{display:block;font-size:.85rem;color:var(--mute)}
+  input,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font:inherit}
+  button{padding:9px 16px;border:0;border-radius:8px;background:var(--acc);color:#fff;font:inherit;cursor:pointer}
+  button.sec{background:var(--line);color:var(--ink)}
+  .stat{text-align:center;padding:12px;border-radius:10px;background:var(--bg)}
+  .stat b{display:block;font-size:1.5rem}.stat span{font-size:.8rem;color:var(--mute)}
+  .bar{height:14px;background:var(--line);border-radius:7px;overflow:hidden}
+  .bar>div{height:100%;background:var(--acc);width:0;transition:width .4s}
+  table{width:100%;border-collapse:collapse}td,th{padding:6px;text-align:left;border-bottom:1px solid var(--line)}
+  .note{color:var(--mute);font-size:.85rem}.warn{color:var(--warn)}
+  svg{width:100%;height:220px}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:end}.row>div{flex:1;min-width:120px}
+</style>
+</head>
+<body>
+<main>
+  <h1>🥗 My Health Plan</h1>
+
+  <section class="card">
+    <h2>About me &amp; my goal</h2>
+    <form id="profile" class="grid">
+      <div><label>Name<input id="name" placeholder="Your name"></label></div>
+      <div><label>Age<input id="age" type="number" min="14" max="100" required></label></div>
+      <div><label>Sex<select id="sex"><option value="m">Male</option><option value="f">Female</option></select></label></div>
+      <div><label>Height (cm)<input id="height" type="number" step="0.1" required></label></div>
+      <div><label>Current weight (kg)<input id="weight" type="number" step="0.1" required></label></div>
+      <div><label>Target weight (kg)<input id="target" type="number" step="0.1" required></label></div>
+      <div><label>Target date<input id="deadline" type="date" required></label></div>
+      <div><label>Activity<select id="activity">
+        <option value="1.2">Sedentary</option><option value="1.375">Light (1–3 d/wk)</option>
+        <option value="1.55" selected>Moderate (3–5 d/wk)</option><option value="1.725">Very active (6–7 d/wk)</option></select></label></div>
+      <div><label>Diet style<select id="diet">
+        <option value="balanced">Balanced</option><option value="highprotein">High protein</option>
+        <option value="lowcarb">Lower carb</option></select></label></div>
+      <div style="align-self:end"><button>Save &amp; build plan</button></div>
+    </form>
+  </section>
+
+  <div id="out" hidden>
+    <section class="card">
+      <h2 id="hello">Overview</h2>
+      <div class="grid" id="stats"></div>
+      <p class="note" id="warning"></p>
+    </section>
+
+    <section class="card">
+      <h2>Progress to target</h2>
+      <div class="bar"><div id="prog"></div></div>
+      <p class="note" id="progtxt"></p>
+      <div class="row" style="margin-top:12px">
+        <div><label>Date<input id="ldate" type="date"></label></div>
+        <div><label>Weight (kg)<input id="lweight" type="number" step="0.1"></label></div>
+        <div style="flex:0"><button id="logbtn" type="button">Log</button></div>
+      </div>
+      <svg id="chart" viewBox="0 0 600 220" preserveAspectRatio="none"></svg>
+      <table id="logtbl"></table>
+    </section>
+
+    <section class="card">
+      <h2>Daily nutrition plan</h2>
+      <div class="grid" id="macros"></div>
+      <table id="meals" style="margin-top:12px"></table>
+      <p class="note">Estimates use the Mifflin-St Jeor equation. This is general guidance, not medical advice — check with a doctor or dietitian before major diet changes.</p>
+    </section>
+
+    <button class="sec" id="reset">Reset all data</button>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const KEY = 'healthApp.v1';
+let state = JSON.parse(localStorage.getItem(KEY) || 'null');
+const save = () => localStorage.setItem(KEY, JSON.stringify(state));
+const today = () => new Date().toISOString().slice(0,10);
+const days = (a,b) => Math.round((new Date(b)-new Date(a))/864e5);
+
+function plan(p){
+  const w = p.weight;
+  const bmr = 10*w + 6.25*p.height - 5*p.age + (p.sex==='m'?5:-161);
+  const tdee = bmr * p.activity;
+  const d = Math.max(1, days(p.start, p.deadline));
+  const delta = p.target - p.weight;                     // kg to change
+  const perWeek = delta / (d/7);
+  const dailyAdj = delta * 7700 / d;                     // kcal/day
+  let kcal = tdee + dailyAdj;
+  const floor = p.sex==='m' ? 1500 : 1200;
+  let warn = '';
+  if (kcal < floor){ kcal = floor; warn = `Your timeframe is very aggressive; calories were limited to a safe minimum of ${floor} kcal/day, so you'll likely need more time.`; }
+  else if (Math.abs(perWeek) > 1) warn = `That's ${Math.abs(perWeek).toFixed(2)} kg/week — faster than the usual 0.25–1 kg/week recommendation. Consider a longer timeframe.`;
+  const split = {balanced:[.25,.45,.30], highprotein:[.35,.35,.30], lowcarb:[.30,.25,.45]}[p.diet];
+  const g = [kcal*split[0]/4, kcal*split[1]/4, kcal*split[2]/9].map(Math.round);
+  return {bmr,tdee,kcal:Math.round(kcal),perWeek,delta,d,warn,protein:g[0],carbs:g[1],fat:g[2]};
+}
+
+function render(){
+  if(!state){ $('out').hidden = true; return; }
+  const p = state.profile, r = plan(p);
+  const h = p.height/100, bmi = p.weight/(h*h);
+  const cur = state.log.length ? state.log[state.log.length-1].w : p.weight;
+  const curBmi = cur/(h*h);
+  const cat = curBmi<18.5?'Underweight':curBmi<25?'Healthy':curBmi<30?'Overweight':'Obese';
+  $('out').hidden = false;
+  $('hello').textContent = (p.name ? p.name + "'s" : 'Your') + ' overview';
+  const goal = r.delta<0?'Lose':r.delta>0?'Gain':'Maintain';
+  $('stats').innerHTML = [
+    [cur.toFixed(1)+' kg','Current weight'],[p.height+' cm','Height'],
+    [p.target+' kg','Target weight'],[curBmi.toFixed(1)+' ('+cat+')','BMI now'],
+    [Math.max(0,days(today(),p.deadline))+' days','Until '+p.deadline],
+    [goal+' '+Math.abs(r.perWeek).toFixed(2)+' kg/wk','Required pace'],
+  ].map(([a,b])=>`<div class="stat"><b>${a}</b><span>${b}</span></div>`).join('');
+  $('warning').innerHTML = r.warn ? `<span class="warn">⚠ ${r.warn}</span>` : '';
+
+  const total = p.target - p.weight, done = cur - p.weight;
+  const pct = total===0 ? 100 : Math.min(100,Math.max(0,done/total*100));
+  $('prog').style.width = pct+'%';
+  const left = Math.abs(p.target-cur);
+  $('progtxt').textContent = `${pct.toFixed(0)}% there — ${left.toFixed(1)} kg to go.`;
+
+  $('macros').innerHTML = [
+    [r.kcal,'kcal / day'],[r.protein+' g','Protein'],[r.carbs+' g','Carbs'],[r.fat+' g','Fat'],
+    [Math.round(r.tdee),'Maintenance kcal'],[Math.round(r.bmr),'BMR kcal'],
+  ].map(([a,b])=>`<div class="stat"><b>${a}</b><span>${b}</span></div>`).join('');
+
+  const meals = [['Breakfast',.25],['Lunch',.30],['Snack',.10],['Dinner',.35]];
+  $('meals').innerHTML = '<tr><th>Meal</th><th>kcal</th><th>Protein</th><th>Carbs</th><th>Fat</th></tr>' +
+    meals.map(([n,f])=>`<tr><td>${n}</td><td>${Math.round(r.kcal*f)}</td><td>${Math.round(r.protein*f)} g</td><td>${Math.round(r.carbs*f)} g</td><td>${Math.round(r.fat*f)} g</td></tr>`).join('');
+
+  drawChart(p, r);
+  $('logtbl').innerHTML = state.log.length ? '<tr><th>Date</th><th>Weight</th><th></th></tr>' +
+    state.log.slice().reverse().map((e,i)=>`<tr><td>${e.d}</td><td>${e.w} kg</td><td><a href="#" data-i="${state.log.length-1-i}">remove</a></td></tr>`).join('') : '';
+}
+
+function drawChart(p){
+  const pts = [{d:p.start,w:p.weight}, ...state.log];
+  const t0 = new Date(p.start).getTime(), t1 = Math.max(new Date(p.deadline).getTime(), ...pts.map(x=>new Date(x.d).getTime()));
+  const ws = [...pts.map(x=>x.w), p.target], lo = Math.min(...ws)-1, hi = Math.max(...ws)+1;
+  const X = d => 30 + (new Date(d).getTime()-t0)/Math.max(1,t1-t0)*550;
+  const Y = w => 200 - (w-lo)/(hi-lo)*180;
+  const line = pts.map(x=>`${X(x.d)},${Y(x.w)}`).join(' ');
+  $('chart').innerHTML =
+    `<line x1="30" y1="${Y(p.weight)}" x2="580" y2="${Y(p.target)}" stroke="#0ea5e9" stroke-dasharray="6 4" stroke-width="2"/>`+
+    `<polyline points="${line}" fill="none" stroke="#16a34a" stroke-width="3" vector-effect="non-scaling-stroke"/>`+
+    pts.map(x=>`<circle cx="${X(x.d)}" cy="${Y(x.w)}" r="4" fill="#16a34a"/>`).join('')+
+    `<text x="32" y="14" font-size="12" fill="currentColor">${hi.toFixed(0)} kg</text><text x="32" y="216" font-size="12" fill="currentColor">${lo.toFixed(0)} kg</text>`+
+    `<text x="580" y="${Y(p.target)-6}" font-size="12" text-anchor="end" fill="#0ea5e9">target ${p.target}</text>`;
+}
+
+$('profile').addEventListener('submit', e=>{
+  e.preventDefault();
+  const p = {name:$('name').value.trim(), age:+$('age').value, sex:$('sex').value, height:+$('height').value,
+    weight:+$('weight').value, target:+$('target').value, deadline:$('deadline').value,
+    activity:+$('activity').value, diet:$('diet').value, start: state?.profile.start || today()};
+  state = {profile:p, log: state?.log || []};
+  save(); render();
+});
+$('logbtn').onclick = ()=>{
+  const w = +$('lweight').value, d = $('ldate').value || today();
+  if(!w) return;
+  state.log = state.log.filter(x=>x.d!==d).concat({d,w}).sort((a,b)=>a.d.localeCompare(b.d));
+  $('lweight').value=''; save(); render();
+};
+$('logtbl').onclick = e=>{
+  const i = e.target.dataset.i; if(i===undefined) return;
+  e.preventDefault(); state.log.splice(+i,1); save(); render();
+};
+$('reset').onclick = ()=>{ if(confirm('Delete all your data?')){ localStorage.removeItem(KEY); location.reload(); } };
+
+if(state){
+  const p = state.profile;
+  ['name','age','sex','height','weight','target','deadline','activity','diet'].forEach(k=>$(k).value = p[k]);
+}
+$('ldate').value = today();
+render();
+</script>
+</body>
+</html>
