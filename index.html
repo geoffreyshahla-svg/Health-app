@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>My Health Plan</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg">
+<meta name="theme-color" content="#16a34a">
 <style>
   :root{--bg:#f5f7fa;--card:#fff;--ink:#1c2430;--mute:#667085;--acc:#16a34a;--acc2:#0ea5e9;--warn:#d97706;--line:#e4e7ec}
   @media (prefers-color-scheme:dark){:root{--bg:#0f141a;--card:#18202a;--ink:#e8edf3;--mute:#93a0b0;--line:#2a3441}}
@@ -24,6 +27,10 @@
   table{width:100%;border-collapse:collapse}td,th{padding:6px;text-align:left;border-bottom:1px solid var(--line)}
   .note{color:var(--mute);font-size:.85rem}.warn{color:var(--warn)}
   svg{width:100%;height:220px}
+  .sug{display:flex;justify-content:space-between;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)}
+  .sug button{padding:5px 10px;font-size:.8rem;white-space:nowrap}
+  .mini{height:8px;margin:2px 0 8px}
+  a{color:var(--acc2)}
   .row{display:flex;gap:8px;flex-wrap:wrap;align-items:end}.row>div{flex:1;min-width:120px}
 </style>
 </head>
@@ -76,6 +83,26 @@
       <div class="grid" id="macros"></div>
       <table id="meals" style="margin-top:12px"></table>
       <p class="note">Estimates use the Mifflin-St Jeor equation. This is general guidance, not medical advice — check with a doctor or dietitian before major diet changes.</p>
+    </section>
+
+    <section class="card">
+      <h2>Food diary</h2>
+      <div class="row">
+        <div><label>Day<input id="fdate" type="date"></label></div>
+        <div style="flex:2"><label>Food<input id="fname" placeholder="e.g. Oatmeal with berries"></label></div>
+        <div><label>kcal<input id="fk" type="number" min="0"></label></div>
+        <div><label>Protein g<input id="fp" type="number" min="0"></label></div>
+        <div><label>Carbs g<input id="fc" type="number" min="0"></label></div>
+        <div><label>Fat g<input id="ff" type="number" min="0"></label></div>
+        <div style="flex:0"><button id="fadd" type="button">Add</button></div>
+      </div>
+      <div id="ftotals" style="margin-top:12px"></div>
+      <table id="flist"></table>
+    </section>
+
+    <section class="card">
+      <h2>Meal ideas <span class="note">(tap “Add” to log a portion sized to your plan)</span></h2>
+      <div id="ideas"></div>
     </section>
 
     <button class="sec" id="reset">Reset all data</button>
@@ -142,6 +169,7 @@ function render(){
     meals.map(([n,f])=>`<tr><td>${n}</td><td>${Math.round(r.kcal*f)}</td><td>${Math.round(r.protein*f)} g</td><td>${Math.round(r.carbs*f)} g</td><td>${Math.round(r.fat*f)} g</td></tr>`).join('');
 
   drawChart(p, r);
+  renderFood(r);
   $('logtbl').innerHTML = state.log.length ? '<tr><th>Date</th><th>Weight</th><th></th></tr>' +
     state.log.slice().reverse().map((e,i)=>`<tr><td>${e.d}</td><td>${e.w} kg</td><td><a href="#" data-i="${state.log.length-1-i}">remove</a></td></tr>`).join('') : '';
 }
@@ -166,7 +194,7 @@ $('profile').addEventListener('submit', e=>{
   const p = {name:$('name').value.trim(), age:+$('age').value, sex:$('sex').value, height:+$('height').value,
     weight:+$('weight').value, target:+$('target').value, deadline:$('deadline').value,
     activity:+$('activity').value, diet:$('diet').value, start: state?.profile.start || today()};
-  state = {profile:p, log: state?.log || []};
+  state = {profile:p, log: state?.log || [], food: state?.food || []};
   save(); render();
 });
 $('logbtn').onclick = ()=>{
@@ -186,6 +214,53 @@ if(state){
   ['name','age','sex','height','weight','target','deadline','activity','diet'].forEach(k=>$(k).value = p[k]);
 }
 $('ldate').value = today();
+const IDEAS = {
+  balanced:{Breakfast:['Oatmeal with banana, nuts and Greek yogurt','Whole-grain toast, 2 eggs and fruit'],
+    Lunch:['Chicken, brown rice and roasted vegetables','Tuna wholewheat wrap with side salad'],
+    Snack:['Apple with peanut butter','Cottage cheese and berries'],
+    Dinner:['Baked salmon, sweet potato and broccoli','Turkey chili with beans and salad']},
+  highprotein:{Breakfast:['Egg-white omelette with spinach and toast','Protein smoothie with oats and berries'],
+    Lunch:['Grilled chicken salad with quinoa','Lean beef bowl with rice and greens'],
+    Snack:['Greek yogurt with almonds','Protein shake and a banana'],
+    Dinner:['Grilled white fish, lentils and asparagus','Chicken stir-fry with vegetables']},
+  lowcarb:{Breakfast:['Scrambled eggs, avocado and tomatoes','Greek yogurt with nuts and seeds'],
+    Lunch:['Chicken Caesar salad (no croutons)','Zucchini noodles with turkey meatballs'],
+    Snack:['Cheese and cucumber slices','Handful of almonds'],
+    Dinner:['Steak, green beans and mushrooms','Salmon with cauliflower mash']}
+};
+const MEALS = [['Breakfast',.25],['Lunch',.30],['Snack',.10],['Dinner',.35]];
+const uid = () => Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+const esc = t => String(t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function renderFood(r){
+  const day = $('fdate').value || today();
+  const items = (state.food||[]).filter(x=>x.d===day);
+  const tot = items.reduce((a,x)=>({k:a.k+x.k,p:a.p+x.p,c:a.c+x.c,f:a.f+x.f}),{k:0,p:0,c:0,f:0});
+  const row = (n,v,t,u) => `<div class="note">${n}: ${Math.round(v)} / ${t} ${u}</div><div class="bar mini"><div style="width:${Math.min(100,v/t*100)}%;${v>t*1.05?'background:var(--warn)':''}"></div></div>`;
+  $('ftotals').innerHTML = row('Calories',tot.k,r.kcal,'kcal')+row('Protein',tot.p,r.protein,'g')+row('Carbs',tot.c,r.carbs,'g')+row('Fat',tot.f,r.fat,'g');
+  $('flist').innerHTML = items.length ? '<tr><th>Food</th><th>kcal</th><th>P/C/F</th><th></th></tr>'+
+    items.map(x=>`<tr><td>${esc(x.n)}</td><td>${x.k}</td><td>${x.p}/${x.c}/${x.f}</td><td><a href="#" data-fid="${x.id}">remove</a></td></tr>`).join('') : '';
+  $('ideas').innerHTML = MEALS.map(([m,f])=>`<h3 style="margin:10px 0 0;font-size:.95rem">${m} <span class="note">~${Math.round(r.kcal*f)} kcal</span></h3>`+
+    IDEAS[state.profile.diet][m].map((t,i)=>`<div class="sug"><span>${t}</span><button type="button" data-m="${m}" data-i="${i}">Add</button></div>`).join('')).join('');
+}
+function addFood(n,k,p,c,f){
+  state.food = state.food||[];
+  state.food.push({id:uid(),d:$('fdate').value||today(),n,k:Math.round(k),p:Math.round(p),c:Math.round(c),f:Math.round(f)});
+  save(); render();
+}
+$('fadd').onclick = ()=>{
+  const n=$('fname').value.trim(); if(!n||!$('fk').value) return;
+  addFood(n,+$('fk').value,+$('fp').value||0,+$('fc').value||0,+$('ff').value||0);
+  ['fname','fk','fp','fc','ff'].forEach(i=>$(i).value='');
+};
+$('fdate').onchange = render;
+$('flist').onclick = e=>{ const id=e.target.dataset.fid; if(!id) return; e.preventDefault();
+  state.food = state.food.filter(x=>x.id!==id); save(); render(); };
+$('ideas').onclick = e=>{ const m=e.target.dataset.m; if(!m) return;
+  const r=plan(state.profile), f=MEALS.find(x=>x[0]===m)[1];
+  addFood(IDEAS[state.profile.diet][m][+e.target.dataset.i], r.kcal*f, r.protein*f, r.carbs*f, r.fat*f); };
+$('fdate').value = today();
+if('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js');
 render();
 </script>
 </body>
